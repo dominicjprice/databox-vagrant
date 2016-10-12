@@ -1,0 +1,10 @@
+CONFIG = {
+    "IP" => "192.168.101.87",
+    "memory" => 2048,
+    "databox_application_server" => {
+        "recaptcha" => {
+            "public_key" => "",
+            "private_key" => ""
+        }
+    }
+}
