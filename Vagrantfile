@@ -56,7 +56,7 @@ Vagrant.configure(2) do |vagrant|
     
     if [ ! -e "$INSTALLDIR" ]; then
       git clone -o origin -b master \
-          https://github.com/dominicjprice/databox-app-server.git $INSTALLDIR
+          https://github.com/me-box/databox-app-server.git $INSTALLDIR
     else
       cd $INSTALLDIR && git pull origin master
     fi
