@@ -4,22 +4,17 @@
 require "json"
 require "./vagrant-config.rb"
 
-CONSTANTS = {
+Constants = {
     "databox_application_server" => {
         "name" => "databox-app-server",
         "mongodb" => {
+            "name" => "databox-app-server-mongodb",
             "host" => "databox-app-server-mongodb",
             "port" => "27017",
             "user" => "user",
             "pass" => "pass",
             "db" => "databox-app-server"
         }
-    },
-    "mongodb" => {
-        "name" => "mongodb",
-        "user" => "user",
-        "pass" => "pass",
-        "database" => "db"
     },
     "databox_container_manager" => {
     	"registryUrl" => "registry.docker:5000",
@@ -28,17 +23,27 @@ CONSTANTS = {
     }
 }
 
-Vagrant.configure(2) do |c|
+class ::Hash
+  def deep_merge(second)
+    merger = proc { |key, v1, v2| Hash === v1 \
+        && Hash === v2 ? v1.merge(v2, &merger) : v2 }
+    self.merge(second, &merger)
+  end
+end
+
+Vagrant.configure(2) do |vagrant|
+
+  Config = Constants.deep_merge(Configuration)
    
-  c.vm.box = "ubuntu/wily64"
+  vagrant.vm.box = "ubuntu/wily64"
     
-  c.vm.network "private_network", ip: CONFIG["IP"]
+  vagrant.vm.network "private_network", ip: Config["IP"]
     
-  c.vm.provider "virtualbox" do |v|
-    v.memory = CONFIG["memory"]
+  vagrant.vm.provider "virtualbox" do |v|
+    v.memory = Config["memory"]
   end
     
-  c.vm.provision "shell", inline: <<-SHELL
+  vagrant.vm.provision "shell", inline: <<-SHELL
     
     export DEBIAN_FRONTEND=noninteractive
     curl -sL https://deb.nodesource.com/setup_6.x | sudo -E bash -
@@ -46,7 +51,8 @@ Vagrant.configure(2) do |c|
     apt-get install -y git build-essential nodejs
     
     INSTALLDIR="/opt/databox-app-server"
-    IP="#{CONFIG["IP"]}"
+    IP="#{Config["IP"]}"
+    
     
     if [ ! -e "$INSTALLDIR" ]; then
       git clone -o origin -b master \
@@ -56,88 +62,128 @@ Vagrant.configure(2) do |c|
     fi
     
     cat << EOM > $INSTALLDIR/config.json
-#{JSON.generate(CONSTANTS["databox_application_server"]
-    .merge(CONFIG["databox_application_server"]))}
+#{JSON.generate(Config["databox_application_server"])}
 EOM
     
-    sed -i -e "s/datashop\\.amar\\.io\\/user/$IP\\/das\\/user/" \
+    sed -i -e "s/datashop\\.amar\\.io\\/user/$IP\\/app-server\\/user/" \
         -e "s/datashop\\.amar\\.io/$IP/" $INSTALLDIR/email.ls
         
-    mkdir /opt/certs
-    mkdir -p /etc/docker/certs.d/registry.docker:5000
+    CERTDIR=/opt/certs
+    mkdir -p $CERTDIR
+    mkdir -p /etc/docker/certs.d
+    ln -s $CERTDIR /etc/docker/certs.d/registry.docker:5000 
     openssl req -newkey rsa:4096 -nodes -sha256 -keyout \
-        /etc/docker/certs.d/registry.docker:5000/ca.key -x509 -days 365 \
-        -out /etc/docker/certs.d/registry.docker:5000/ca.cert -subj \
-        "/C=GB/ST=Notts/L=Nottingham/O=University of Nottingham/OU=Horizon DER/CN=registry.docker"
-    while [ ! -e /etc/docker/certs.d/registry.docker:5000/ca.cert ]; do
-        echo "Waiting for certificate"
-        sleep 1s
-    done
-    cp /etc/docker/certs.d/registry.docker:5000/ca.cert \
-        /etc/docker/certs.d/registry.docker:5000/ca.crt
-    cp /etc/docker/certs.d/registry.docker:5000/* /opt/certs
-
+        $CERTDIR/client.key -x509 -days 365 -out $CERTDIR/client.cert -subj \
+        "/C=GB/ST=Notts/L=Nottingham/O=University of Nottingham/OU=Horizon DER\
+            /CN=registry.docker"
+    cp -f $CERTDIR/client.cert $CERTDIR/ca.crt
+    exit 0
+    
   SHELL
   
-  c.vm.provision "docker" do |d|
+  vagrant.vm.provision "docker", 
+      images: [ "tutum/mongodb", "gliderlabs/resolvable:master", 
+          "registry:2", "nginx:latest" ]
+          
+  vagrant.vm.provision "shell", inline: <<-SHELL
+  
+    for container in "registry" "resolvable" "frontend-proxy" \
+        "#{Config["databox_application_server"]["name"]}" \
+        "#{Config["databox_application_server"]["mongodb"]["name"]}"; do 
+      docker stop $container 
+  	  docker wait $container
+      docker rm $container
+    done
+    
+    exit 0
+  
+  SHELL
+  
+  vagrant.vm.provision "docker" do |d|
 
-    conf = CONSTANTS["databox_application_server"]
-        
-    d.pull_images "tutum/mongodb"
-    
-    d.pull_images "gliderlabs/resolvable:master"
-    
-    d.pull_images "registry:2"
-    
-    d.pull_images "dominicjprice/docker-apache-2.4-proxy:latest"
-    
     d.run "gliderlabs/resolvable:master",
         auto_assign_name: false,
         args: "--name resolvable \
             -v /var/run/docker.sock:/tmp/docker.sock \
             -v /etc/resolv.conf:/tmp/resolv.conf"
-      
+
     d.run "registry:2",
         auto_assign_name: false,
         args: "--name registry -p 5000:5000 \
             -v /opt/certs:/certs \
-            -e REGISTRY_HTTP_TLS_CERTIFICATE=/certs/ca.cert \
-            -e REGISTRY_HTTP_TLS_KEY=/certs/ca.key"
-        
+            -e REGISTRY_HTTP_TLS_CERTIFICATE=/certs/client.cert \
+            -e REGISTRY_HTTP_TLS_KEY=/certs/client.key"
+            
+    das_conf = Config["databox_application_server"]
+    
     d.run "tutum/mongodb",
         auto_assign_name: false,
-        args: "--name #{conf["mongodb"]["host"]} \
-            -e MONGODB_USER=\"#{conf["mongodb"]["user"]}\" \
-            -e MONGODB_PASS=\"#{conf["mongodb"]["pass"]}\" \
-            -e MONGODB_DATABASE=\"#{conf["mongodb"]["db"]}\""
+        args: "--name #{das_conf["mongodb"]["name"]} \
+            -e MONGODB_USER=\"#{das_conf["mongodb"]["user"]}\" \
+            -e MONGODB_PASS=\"#{das_conf["mongodb"]["pass"]}\" \
+            -e MONGODB_DATABASE=\"#{das_conf["mongodb"]["db"]}\""
                         
-    d.build_image "/opt/databox-app-server", args: "-t #{conf["name"]}"
+    d.build_image "/opt/databox-app-server", args: "-t #{das_conf["name"]}"
         
-    d.run conf["name"],
+    d.run das_conf["name"],
         auto_assign_name: false,
-        args: "--name #{conf["name"]} -e PORT=80 \
-              --link #{conf["mongodb"]["host"]}:#{conf["mongodb"]["host"]}"
-                        
-  end  
+        args: "--name #{das_conf["name"]} -e PORT=80 --link \
+            #{das_conf["mongodb"]["name"]}:#{das_conf["mongodb"]["name"]}"
 
-  c.vm.provision "shell", inline: <<-SHELL
+  end
+  
+  vagrant.vm.provision "shell", inline: <<-SHELL
             
     if [ ! -e "/opt/frontend-proxy" ]; then
       mkdir /opt/frontend-proxy
     fi
-    echo "FROM dominicjprice/docker-apache-2.4-proxy:latest" >> /opt/frontend-proxy/Dockerfile
-    echo "ADD proxy.conf /conf/" >> /opt/frontend-proxy/Dockerfile
-    echo "ProxyPass /das/ http://#{CONSTANTS["databox_application_server"]["name"]}/" \
-        >> /opt/frontend-proxy/proxy.conf
-    echo "ProxyPass / http://#{CONFIG["IP"]}:8080/" >> /opt/frontend-proxy/proxy.conf
+    
+    cat << EOM > /opt/frontend-proxy/default.conf
+server {
+    
+  listen       80;
+  server_name  localhost;
+
+  location /app-server/ {
+      proxy_pass http://#{Config["databox_application_server"]["name"]}.docker/;
+      proxy_http_version 1.1;
+      proxy_set_header Host \\$host;
+  }
+
+  location /socket.io/ {
+    proxy_pass http://#{Config["IP"]}:8080/socket.io/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade \\$http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host \\$host;
+  }
+
+  location / {
+    proxy_pass http://#{Config["IP"]}:8080/;
+    proxy_http_version 1.1;
+    proxy_set_header Host \\$host;
+  }
+
+  error_page 500 502 503 504 /50x.html;
+  location = /50x.html {
+    root /usr/share/nginx/html;
+  }
+
+}
+EOM
+    
+    cat << EOM > /opt/frontend-proxy/Dockerfile
+FROM nginx:latest
+ADD default.conf /etc/nginx/conf.d/default.conf
+EOM
     
   SHELL
-
-  c.vm.provision "docker" do |d|
+  
+  vagrant.vm.provision "docker" do |d|
         
     d.build_image "/opt/frontend-proxy", args: "-t frontend-proxy"
         
-    app_server_name = CONSTANTS["databox_application_server"]["name"]
+    app_server_name = Config["databox_application_server"]["name"]
         
     d.run "frontend-proxy", 
         auto_assign_name: false,
@@ -147,16 +193,16 @@ EOM
 
   end
   
-  c.vm.provision "shell", inline: <<-SHELL
+  vagrant.vm.provision "shell", inline: <<-SHELL
   
-    docker pull registry.upintheclouds.org/databox-arbiter:latest
-    docker tag registry.upintheclouds.org/databox-arbiter:latest \
-        registry.docker:5000/databox-arbiter:latest
-    docker push registry.docker:5000/databox-arbiter:latest
-    docker pull registry.upintheclouds.org/databox-directory:latest
-    docker tag registry.upintheclouds.org/databox-directory:latest \
-        registry.docker:5000/databox-directory:latest
-    docker push registry.docker:5000/databox-directory:latest
+  	from_registry="registry.upintheclouds.org"
+  	to_registry="registry.docker:5000"
+    for image in "databox-arbiter" "databox-directory"; do
+      docker pull ${from_registry}/${image}:latest
+      docker tag -f ${from_registry}/${image}:latest \
+          ${to_registry}/${image}:latest
+      docker push ${to_registry}/${image}:latest
+    done
   
     INSTALLDIR="/opt/databox-container-manager"
     
@@ -168,15 +214,16 @@ EOM
     fi
     
     cat << EOM > $INSTALLDIR/src/config.json
-#{JSON.generate(CONSTANTS["databox_container_manager"])}
+#{JSON.generate(Config["databox_container_manager"])}
 EOM
 
 	sed -i "s/var server = require('\\.\\/server.js');/var server = require('\\.\\/server.js');\\nprocess.env.NODE_TLS_REJECT_UNAUTHORIZED = \\"0\\";/" $INSTALLDIR/src/main.js
 
+	killall npm
     cd $INSTALLDIR
     npm install -g riot pug
     npm install --production
-    npm run build 
+    nohup npm start 0<&- &>/var/log/databox-container-manager &
   
   SHELL
   
