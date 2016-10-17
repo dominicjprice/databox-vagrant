@@ -197,7 +197,8 @@ EOM
   
   	from_registry="registry.upintheclouds.org"
   	to_registry="registry.docker:5000"
-    for image in "databox-arbiter" "databox-directory"; do
+    for image in "databox-arbiter" "databox-directory" \
+        "databox-notifications"; do
       docker pull ${from_registry}/${image}:latest
       docker tag -f ${from_registry}/${image}:latest \
           ${to_registry}/${image}:latest
