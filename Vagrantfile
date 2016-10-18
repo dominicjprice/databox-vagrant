@@ -200,7 +200,7 @@ EOM
     for image in "databox-arbiter" "databox-directory" \
         "databox-notifications"; do
       docker pull ${from_registry}/${image}:latest
-      docker tag -f ${from_registry}/${image}:latest \
+      docker tag ${from_registry}/${image}:latest \
           ${to_registry}/${image}:latest
       docker push ${to_registry}/${image}:latest
     done
