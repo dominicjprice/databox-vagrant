@@ -195,11 +195,12 @@ EOM
   
   vagrant.vm.provision "shell", inline: <<-SHELL
   
-  	from_registry="registry.upintheclouds.org"
-  	to_registry="registry.docker:5000"
+    from_registry="registry.upintheclouds.org"
+    to_registry="registry.docker:5000"
     for image in "databox-arbiter" "databox-directory" \
         "databox-notifications"; do
       docker pull ${from_registry}/${image}:latest
+      docker rmi ${to_registry}/${image}:latest
       docker tag ${from_registry}/${image}:latest \
           ${to_registry}/${image}:latest
       docker push ${to_registry}/${image}:latest
@@ -209,7 +210,7 @@ EOM
     
     if [ ! -e "$INSTALLDIR" ]; then
       git clone -o origin -b master \
-          https://github.com/ktg/databox-container-manager.git $INSTALLDIR
+          https://github.com/me-box/databox-container-manager.git $INSTALLDIR
     else
       cd $INSTALLDIR && git pull origin master
     fi
@@ -218,11 +219,12 @@ EOM
 #{JSON.generate(Config["databox_container_manager"])}
 EOM
 
-	sed -i "s/var server = require('\\.\\/server.js');/var server = require('\\.\\/server.js');\\nprocess.env.NODE_TLS_REJECT_UNAUTHORIZED = \\"0\\";/" $INSTALLDIR/src/main.js
+    sed -i "s/var server = require('\\.\\/server.js');/var server = require('\\.\\/server.js');\\nprocess.env.NODE_TLS_REJECT_UNAUTHORIZED = \\"0\\";/" $INSTALLDIR/src/main.js
 
-	killall npm
+    killall npm
     cd $INSTALLDIR
-    npm install -g riot pug
+    npm install -g riot pug-cli node-sass
+    npm run build
     npm install --production
     nohup npm start 0<&- &>/var/log/databox-container-manager &
   
